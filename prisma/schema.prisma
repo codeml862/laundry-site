@@ -1,0 +1,379 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  // Supabase: the app uses the transaction pooler; migrations need the session pooler (DIRECT_URL).
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  STAFF
+  RIDER
+}
+
+enum Unit {
+  KG
+  ITEM
+  FIXED
+}
+
+enum OrderStatus {
+  ORDER_PLACED
+  PICKUP_SCHEDULED
+  PICKED_UP
+  RECEIVED
+  WASHING
+  DRYING
+  IRONING
+  QUALITY_CHECK
+  READY
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  COD
+  RAZORPAY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUND_PENDING
+  REFUNDED
+}
+
+enum DiscountKind {
+  PERCENT
+  FIXED
+}
+
+enum TokenPurpose {
+  VERIFY
+  RESET
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  passwordHash  String
+  name          String
+  role          Role           @default(CUSTOMER)
+  permissions   String[]       @default([])
+  active        Boolean        @default(true)
+  verified      Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  profile       Profile?
+  addresses     Address[]
+  sessions      Session[]
+  tokens        AuthToken[]
+  orders        Order[]
+  cart          Cart?
+  notifications Notification[]
+  tickets       Ticket[]
+  reviews       Review[]
+  dispatchRider DispatchRider?
+}
+
+model Profile {
+  userId String @id
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone  String @default("")
+}
+
+model Session {
+  tokenHash String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuthToken {
+  tokenHash String       @id
+  purpose   TokenPurpose
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+model Address {
+  id         String @id @default(cuid())
+  userId     String
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label      String
+  line1      String
+  line2      String @default("")
+  city       String
+  postalCode String
+  phone      String
+
+  @@index([userId])
+}
+
+model ServiceCategory {
+  name     String    @id
+  services Service[]
+}
+
+model Service {
+  id          String          @id @default(cuid())
+  familyKey   String?
+  familyName  String?
+  speed       String          @default("REGULAR")
+  size        String          @default("MEDIUM")
+  name        String          @unique
+  description String
+  price       Int
+  unit        Unit
+  hours       Int
+  image       String?
+  category    String
+  group       ServiceCategory @relation(fields: [category], references: [name])
+  active      Boolean         @default(true)
+  cartItems   CartItem[]
+  orderItems  OrderItem[]
+  updatedAt   DateTime        @updatedAt
+
+  @@index([active, category])
+  @@unique([familyKey, speed, size])
+}
+
+model Cart {
+  userId String     @id
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items  CartItem[]
+}
+
+model CartItem {
+  cartId    String
+  cart      Cart    @relation(fields: [cartId], references: [userId], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id])
+  quantity  Float
+
+  @@id([cartId, serviceId])
+}
+
+model Order {
+  id           String         @id @default(cuid())
+  userId       String
+  user         User           @relation(fields: [userId], references: [id])
+  requestId    String?
+  address      Json
+  pickupDate   String
+  pickupSlot   String
+  deliveryDate String?
+  deliverySlot String?
+  instructions String         @default("")
+  status       OrderStatus    @default(ORDER_PLACED)
+  subtotal     Int
+  tax          Int
+  discount     Int
+  deliveryFee  Int
+  total        Int
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  items        OrderItem[]
+  history      OrderHistory[]
+  payment      Payment?
+  couponUsage  CouponUsage?
+  review       Review?
+  dispatchRequests DispatchRequest[]
+
+  @@unique([userId, requestId])
+  @@index([userId, createdAt])
+  @@index([status, pickupDate])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service @relation(fields: [serviceId], references: [id])
+  name      String
+  price     Int
+  unit      Unit
+  quantity  Float
+
+  @@index([orderId])
+}
+
+model OrderHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    OrderStatus
+  actorId   String?
+  createdAt DateTime    @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+model Payment {
+  orderId           String        @id
+  order             Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method            PaymentMethod
+  status            PaymentStatus @default(PENDING)
+  amount            Int
+  externalOrderId   String?       @unique
+  externalPaymentId String?       @unique
+  refundId          String?
+  operationAt       DateTime?
+  refundAttempt     String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model Coupon {
+  id        String        @id @default(cuid())
+  code      String        @unique
+  kind      DiscountKind
+  value     Int
+  minimum   Int           @default(0)
+  expiresAt DateTime?
+  limit     Int?
+  active    Boolean       @default(true)
+  uses      CouponUsage[]
+}
+
+model CouponUsage {
+  orderId  String @id
+  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  couponId String
+  coupon   Coupon @relation(fields: [couponId], references: [id])
+
+  @@index([couponId])
+}
+
+model Review {
+  orderId   String   @id
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  rating    Int
+  comment   String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  dedupeKey String?   @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  read      Boolean   @default(false)
+  emailedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([emailedAt, createdAt])
+}
+
+model Ticket {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  subject   String
+  message   String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Settings {
+  id             Int      @id @default(1)
+  businessName   String   @default("Quicklywash")
+  logo           String   @default("")
+  contactEmail   String   @default("")
+  contactPhone   String   @default("")
+  operatingHours String   @default("Daily, 9 AM–6 PM")
+  cod            Boolean  @default(true)
+  onlinePayments Boolean  @default(false)
+  taxBps         Int      @default(0)
+  deliveryFee    Int      @default(0)
+  minimum        Int      @default(0)
+  serviceAreas   String[] @default([])
+  slots          String[] @default(["09:00–11:00", "12:00–14:00", "16:00–18:00"])
+}
+
+model DispatchRider {
+  id String @id @default(cuid())
+  name String
+  phone String
+  active Boolean @default(true)
+  userId String? @unique
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  requests DispatchRequest[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DispatchRequest {
+  id String @id @default(cuid())
+  orderId String
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  kind String
+  status String @default("PENDING")
+  date String
+  slot String
+  riderId String?
+  rider DispatchRider? @relation(fields: [riderId], references: [id], onDelete: SetNull)
+  history DispatchEvent[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([orderId, kind])
+  @@index([date, status])
+  @@index([riderId, status])
+}
+
+model DispatchEvent {
+  id String @id @default(cuid())
+  requestId String
+  request DispatchRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  status String
+  note String
+  actorId String
+  createdAt DateTime @default(now())
+  @@index([requestId, createdAt])
+}
+
+/// Message sent from the public "Contact us" form (visitors don't need an account).
+model Enquiry {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  phone     String   @default("")
+  message   String
+  status    String   @default("NEW")
+  createdAt DateTime @default(now())
+
+  @@index([status, createdAt])
+}
